@@ -16,7 +16,7 @@ app.use(cookieParser());
 app.use(cors({ origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000'], credentials: true }));
 if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
 
-app.get('/health', (_req, res) => res.json({ ok: true, env: process.env.NODE_ENV }));
+app.get('/health', (_req, res) => res.json({ ok: true, env: process.env.NODE_ENV, extra: "Feature tes" }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server running on port ${port}`));
