@@ -1,0 +1,50 @@
+# Authentication Architecture (Express + PostgreSQL)
+
+## 1. Core Updates
+- Database: PostgreSQL (Render managed service or external provider like Neon/Supabase).
+- ORM/Query Builder: Knex or Prisma for portability (SQLite for local dev, PostgreSQL for prod).
+- Secure connection handling with SSL for production.
+
+## 2. Environment Strategy
+- Use `.env` for local dev and Docker Compose.
+- Render uses injected environment variables (DATABASE_URL, NODE_ENV).
+- Robust NODE_ENV check:
+  const isProd = (process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+
+## 3. Startup DB Connectivity Check
+- Before starting Express server, verify DB connection:
+  - If DB fails, log error and exit process.
+  - Optional: Retry logic with exponential backoff.
+
+## 4. API Endpoints
+- `/health` → App status.
+- `/db-health` → DB connectivity check (via pg Pool).
+- Future endpoints:
+  - `/register` → Local registration with email verification.
+  - `/login` → Local login with MFA.
+  - `/social/:provider` → Social login (Google, GitHub first).
+  - `/verify/email` → Email verification.
+  - `/mfa/*` → MFA setup and verification.
+  - `/session/refresh` → Token rotation.
+  - `/logout` → Session invalidation.
+
+## 5. Security Enhancements
+- Password hashing: Argon2id.
+- HTTPS only, HSTS, secure cookies (httpOnly, SameSite=strict).
+- CSRF protection for state-changing requests.
+- CORS allowlist (no wildcards).
+- Rate limiting: IP + account-based.
+- SQL safety: Parameterized queries only.
+- Secrets: Rotate keys, encrypt TOTP secrets, store OTPs hashed.
+- Audit logs for auth events.
+
+## 6. Deployment Notes
+- Dockerfile: No hardcoded env vars; rely on Render injection.
+- Render.yaml: Define environment variables and service dependencies.
+- External DB access for local dev: Enable external connections or use Neon/Supabase.
+
+## 7. Testing Strategy
+- Unit tests: Password hashing, token validation.
+- Integration tests: Full flows (register → verify → login → MFA).
+- Negative tests: Wrong passwords, expired OTPs.
+- Security tests: OWASP ZAP, fuzzing, load tests.
