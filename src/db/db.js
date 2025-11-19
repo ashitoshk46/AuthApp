@@ -21,7 +21,6 @@ const checkDbConnection = async () => {
     try {
         console.log();
         console.log('=> DB Pre-check: Attempting to connect to the database...');
-        console.log(process.env.DATABASE_URL);
         await getPool().query('SELECT 1 AS ok');
         console.log('>> DB Pre-check: Database connection successful.');
     } catch (err) {
