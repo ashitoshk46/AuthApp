@@ -1,0 +1,311 @@
+**Designing account flow**
+
+Alright, so the user gave me some clear requirements for account flows. I’ll break it down into sections like Overview, Account types and providers, Data model, and so on. I should avoid using tables unless necessary, but I'll mention things like social providers, linking accounts, and setting passwords for security steps. I'll touch on MFA choices, OTP verification, and blocking login until verification is done. I’ll keep everything concise and clear while covering steps like registration, email setup, and endpoint planning. No need for citations, just a thorough breakdown that's easy to follow.
+# Auth design for express and sqlite
+
+You want a flexible, secure system: local username/email/password, broad social login, mandatory first-time email verification, and 2FA via email OTP and TOTP. Here’s a focused blueprint you can implement with free libraries.
+
+---
+
+## Core approach and libraries
+
+- **Stack:** Express + SQLite (with `better-sqlite3` or `knex`).
+- **Password hashing:** Argon2id via `argon2` npm.
+- **Social/OIDC clients:** `openid-client` (preferred) or Passport strategies for each provider.
+- **Email:** `nodemailer` with a free SMTP relay (your own domain or providers’ free tiers).
+- **TOTP:** `speakeasy` for secrets + `qrcode` for QR provisioning.
+- **Sessions/tokens:**  
+  - **Web:** Secure, httpOnly cookies with server-side sessions.  
+  - **API/mobile:** Short-lived JWT access tokens + refresh tokens, rotation and reuse detection.
+- **Rate limiting:** `rate-limiter-flexible` or `express-rate-limit`.
+- **Input validation:** `zod` or `joi` for schema validation.
+
+---
+
+## Account types and providers
+
+- **Local account:** Username or email + password; user must verify email before any login succeeds.
+- **Social account:** Google, Microsoft, Facebook, Apple, GitHub, GitLab, Bitbucket, LinkedIn, Twitter/X, Discord, Reddit.  
+  - **Policy:** After first social login, require user to set a local password (for recovery and extra assurance).  
+  - **Linking:** Multiple social identities can link to one local user; enforce email ownership checks before linking.
+
+---
+
+## Data model (SQLite)
+
+- **users:**  
+  - **Columns:** id (PK), uid (unique), email (unique), display_name, email_verified (bool), created_at, updated_at.  
+- **credentials_local:**  
+  - **Columns:** user_id (FK), password_hash, password_set_at.  
+- **credentials_social:**  
+  - **Columns:** user_id (FK), provider (enum), provider_subject (unique per provider), email_at_provider, linked_at.  
+- **email_verifications:**  
+  - **Columns:** user_id (FK), token (unique), expires_at, used (bool).  
+- **mfa_totp:**  
+  - **Columns:** user_id (FK), secret_encrypted, enabled (bool), created_at.  
+- **mfa_email_otp:**  
+  - **Columns:** user_id (FK), otp_hash, expires_at, consumed (bool), send_count, last_sent_at.  
+- **sessions/refresh_tokens:**  
+  - **Columns:** user_id (FK), session_id, refresh_token_hash, device_info, created_at, revoked_at, last_used_at, replaced_by.  
+- **audit_logs:**  
+  - **Columns:** id, user_id, event_type, ip, user_agent, metadata_json, created_at.
+
+---
+
+## Registration flows
+
+### Local registration (username/email/password)
+
+- **Validate inputs:**  
+  - **Username/email:** Normalize, check uniqueness, reject confusables/mixed scripts.  
+  - **Password:** Enforce strength; hash with Argon2id and strong parameters.
+- **Create user:**  
+  - **Store:** users + credentials_local.  
+  - **Send email verification:** Create signed token with short expiry (e.g., 30–60 minutes); email OTP or link.  
+- **Lock before verification:**  
+  - **Policy:** user cannot log in until email_verified = true.
+
+### Social registration (Google, GitHub, etc.)
+
+- **Redirect to provider:** Authorization Code + PKCE (via `openid-client`).
+- **Callback:**  
+  - **Verify tokens:** Validate ID token signature, audience, issuer, nonce.  
+  - **User lookup/linking:**  
+    - **If provider_subject exists:** Log into linked user (still require email verification if not yet verified).  
+    - **If email matches an existing local user:** Require email verification challenge before linking, then link provider_subject.  
+    - **Else:** Create new user with email (if available) and mark email_verified = false until verified.
+- **Require password set:**  
+  - **If no local password:** Prompt flow to set a password immediately after social signup; store Argon2id hash.  
+- **Send email verification:**  
+  - **Policy:** Always send verification; block login until verified.
+
+---
+
+## Email verification
+
+- **Issuance:**  
+  - **Token:** Random, single-use, short expiry; store hash of token (not plaintext).  
+  - **Email:** Include a one-time link and optionally display the OTP code for manual entry.
+- **Completion:**  
+  - **On hit/OTP submit:** Validate token/OTP, mark used, set email_verified = true.  
+  - **Security:** Rate-limit send attempts, limit active tokens, invalidate prior tokens on new send.
+
+---
+
+## Login flows
+
+### Local login (username/email + password)
+
+- **Pre-checks:**  
+  - **Email verified:** If false, return “verification required.” Offer resend verification.  
+  - **Rate limiting:** Per-IP and per-uid; progressive backoff; optional CAPTCHA after thresholds.
+- **Password validation:**  
+  - **Argon2id verify:** If wrong, uniform error; don’t leak existence.  
+- **2FA challenge:**  
+  - **If TOTP enabled:** Prompt TOTP; verify with small window and allow backup codes.  
+  - **Else if email OTP chosen:** Send OTP, verify before session issuance.  
+  - **If both enabled:** Allow user to choose; enforce one successful factor per login.
+- **Session/JWT issuance:**  
+  - **Web:** Set secure cookie; session store keyed by session_id.  
+  - **API/mobile:** Issue short-lived access token and a refresh token bound to device; rotate on use.
+
+### Social login
+
+- **Callback handling:**  
+  - **Email verified gate:** If user’s email_verified is false, force verification first.  
+  - **2FA:** Apply after social login the same as local login (TOTP or email OTP).
+- **Session/JWT issuance:**  
+  - **Same as local login** once verification and 2FA succeed.
+
+---
+
+## MFA management
+
+- **TOTP setup:**  
+  - **Provisioning:** Generate base32 secret, display QR; store encrypted secret.  
+  - **Activation:** Require user to enter two consecutive TOTP codes to enable; create emergency backup codes.  
+  - **Recovery:** Allow disabling only with re-auth + email confirmation; show last used info.
+- **Email OTP:**  
+  - **Send:** Single-use OTP, short expiry (e.g., 5 minutes); throttle sends; don’t reveal existence in errors.  
+  - **Verify:** Compare hashed OTP; mark consumed; log metadata.
+
+---
+
+## SSO between your apps
+
+- **Preferred:** Use OIDC with a free IdP (Keycloak or Authentik) to issue tokens; your Express services validate via JWKS.  
+- **If DIY:** Implement authorization code flow, discovery document, token endpoint, and JWKS; sign ID/access tokens with rotating RSA keys; maintain audience/scope validation across services.
+
+---
+
+## Security hardening
+
+- **Passwords:**  
+  - **Argon2id:** Tune memory/time costs to your server; pepper (optional) via env secret; block breached passwords using a local hash list or k-anonymity APIs.  
+- **Transport and cookies:**  
+  - **HTTPS only:** HSTS, secure + httpOnly + SameSite=strict cookies.  
+- **CSRF:**  
+  - **Cookies-based flows:** CSRF tokens for state-changing requests; SameSite helps but isn’t sufficient alone.  
+- **CORS:**  
+  - **Restrict origins:** Explicit allowlist; lock methods/headers.  
+- **Input safety:**  
+  - **Validation:** Strict schemas; canonicalization; confusable checks; reject mixed scripts in uid.  
+- **Storage:**  
+  - **Parameterized queries:** Avoid SQL injection; never concatenate input.  
+  - **Secrets:** Rotate keys; encrypt TOTP secrets at rest; keep private keys off repo.  
+- **Abuse controls:**  
+  - **Rate limiting:** Per-IP and per-account; sliding window.  
+  - **DoS:** Request size/time limits; concurrency caps per route; 429 on overload.  
+- **Token hygiene:**  
+  - **Short TTLs:** 5–15 min access tokens; refresh rotation with reuse detection and global logout on reuse.  
+  - **Logout:** Server-side session invalidation; revoke refresh tokens; kill device-specific sessions.  
+- **Audit/alerts:**  
+  - **Logs:** Auth events with IP/UA; anomaly detection (sudden geo, many failures).
+
+---
+
+## Endpoint plan
+
+- **POST /register**  
+  - **Create local user:** uid/email/password; send verification email.
+- **POST /social/:provider/start**  
+  - **Redirect:** Begin OAuth2/OIDC with nonce/state.
+- **GET /social/:provider/callback**  
+  - **Handle tokens:** Create/link user; require password set if missing; send verification email.
+- **POST /verify/email**  
+  - **Verify:** Token or OTP to confirm email ownership.
+- **POST /login**  
+  - **Local login:** Check verification, password, then MFA challenge.
+- **POST /mfa/totp/setup**  
+  - **Provision:** Return QR; store encrypted secret.
+- **POST /mfa/totp/enable**  
+  - **Confirm:** Verify codes; enable TOTP; issue backup codes.
+- **POST /mfa/email/send**  
+  - **Send OTP:** Throttled; one active OTP.
+- **POST /mfa/email/verify**  
+  - **Verify OTP:** Consume and proceed.
+- **POST /session/refresh**  
+  - **Rotate refresh:** Issue new access/refresh; detect reuse.
+- **POST /logout**  
+  - **Invalidate:** Revoke session/refresh tokens.
+- **GET /me**  
+  - **Profile:** Authenticated user info and MFA status.
+
+---
+
+## Testing strategy
+
+- **Unit tests:**  
+  - **Password hashing/verification:** Argon2id params; breach checks.  
+  - **Token validation:** ID/JWT signature, expiry, audience.  
+  - **Validators:** Email/uid normalization and confusable detection.
+- **Integration tests (Supertest):**  
+  - **Flows:** Local register → email verify → login → MFA; social login/linking; refresh rotation with reuse detection.  
+  - **Negative paths:** Wrong passwords, expired OTPs, replayed tokens, unverified user login blocked.
+- **Security tests:**  
+  - **ZAP/OWASP:** Dynamic scans for injection, XSS, CSRF.  
+  - **Load:** k6 or autocannon to validate rate limits/timeouts.  
+  - **Fuzz:** Edge input payloads; Unicode confusables.
+- **Cross-app SSO tests:**  
+  - **JWKS:** Key rotation; audience/scope enforcement; logout propagation.
+
+---
+
+## Practical recommendations
+
+- **Start with local login:** Registration + email verification + TOTP; enforce “no login before verified.”  
+- **Add social providers incrementally:** Begin with Google and GitHub via `openid-client`; add Microsoft/Apple next.  
+- **Prompt password creation after social signup:** Block until password is set and email verified.  
+- **Offer MFA choice:** Let users enable TOTP, email OTP, or both; require one during login.  
+- **Plan for SSO early:** If you’ll have multiple apps, decide whether to adopt Keycloak/Authentik to avoid building IdP internals.
+
+If you share your client types (browser-only, mobile), I can adjust the token/session choices and the exact endpoints for your setup.
+# Authentication Architecture (Express + SQLite)
+
+## 1. Core Concepts
+- **OAuth2:** Authorization framework; lets apps access resources without sharing passwords.
+- **OIDC (OpenID Connect):** Identity layer on top of OAuth2; provides ID tokens with user claims.
+- **SAML:** XML-based enterprise SSO standard; common in corporate environments.
+- **SSO (Single Sign-On):** One login grants access to multiple apps; implemented via OIDC or SAML.
+- **IdP (Identity Provider):** Authenticates users and issues identity assertions (Google, GitHub, Keycloak).
+- **SP (Service Provider):** Consumes identity assertions (your app).
+- **Keycloak / Authentik:** Free, open-source IdPs supporting OIDC, SAML, MFA, social login.
+- **PKCE (Proof Key for Code Exchange):** Security upgrade to OAuth2; prevents code interception; required for public clients.
+- **Redirect URI:** Pre-registered return address where the IdP sends the user after login.
+- **Public Client:** Cannot safely store secrets (mobile, desktop, SPA). Must use PKCE.
+- **Confidential Client:** Server-side apps that can store secrets securely.
+
+---
+
+## 2. Registration & Login Flows
+- **Local registration:** Username/email + password → email verification required before login.
+- **Social registration:** OAuth2/OIDC with providers (Google, Microsoft, GitHub, LinkedIn, etc.).
+  - If provider email is verified, still enforce your own email verification.
+  - Require user to set a local password for recovery.
+- **Verification:** Email OTP or link; limit resends (e.g., 3/day with server-enforced delays).
+- **Login:**
+  - Local: password → email verified check → 2FA challenge.
+  - Social: provider login → email verified check → 2FA challenge.
+- **2FA options:**
+  - Email OTP (default, free).
+  - TOTP via authenticator apps (Google, Microsoft, Authy, 1Password, Bitwarden, Aegis, etc.).
+
+---
+
+## 3. Account Linking
+- Primary email must always be verified.
+- New linked email/social must be verified before use.
+- Linking requires re-authentication of current session.
+- Any verified linked identity can be used to login.
+- Recommended: cap linked identities (e.g., 5–10).
+
+---
+
+## 4. Security Best Practices
+- **Password hashing:** Argon2id with strong parameters.
+- **Transport:** HTTPS only, HSTS, secure cookies (httpOnly, SameSite=strict).
+- **CSRF:** Tokens for state-changing requests.
+- **CORS:** Restrict origins; no wildcards.
+- **Rate limiting:** Per-IP and per-account; progressive backoff.
+- **SQL safety:** Parameterized queries; no string concatenation.
+- **Secrets:** Rotate keys; encrypt TOTP secrets; store OTPs hashed.
+- **Audit logs:** Record auth events with IP, user agent, metadata.
+- **Fraud detection:**
+  - Rules: unusual geo/device/time, rapid provider switching, long inactivity.
+  - Optional AI/ML: anomaly detection on login metadata; trigger step-up MFA.
+
+---
+
+## 5. Multi-Client Support
+- **Web:** Redirect URIs like `https://yourapp.com/oauth/callback`; cookies + CSRF.
+- **Mobile:** Custom scheme (`myapp://callback`) or universal links; PKCE required.
+- **Desktop:** Custom scheme or loopback (`http://127.0.0.1:port/callback`); PKCE required.
+- **Token style:**
+  - Web: server sessions with cookies.
+  - Mobile/desktop: JWT access tokens (short-lived) + refresh tokens (rotation).
+
+---
+
+## 6. Endpoint Plan
+- `POST /register` → local registration + email verification.
+- `POST /social/:provider/start` → begin OAuth2/OIDC flow.
+- `GET /social/:provider/callback` → handle tokens, link/create user, enforce password + email verification.
+- `POST /verify/email` → confirm email token/OTP.
+- `POST /login` → local login with password + 2FA.
+- `POST /mfa/totp/setup` → provision QR + secret.
+- `POST /mfa/totp/enable` → confirm codes, enable TOTP.
+- `POST /mfa/email/send` → send OTP.
+- `POST /mfa/email/verify` → verify OTP.
+- `POST /link/email` / `POST /link/provider` → add new identity, require verification.
+- `POST /session/refresh` → rotate refresh tokens.
+- `POST /logout` → revoke sessions/tokens.
+- `GET /me` → profile + MFA status.
+
+---
+
+## 7. Testing Strategy
+- **Unit tests:** Password hashing, token validation, input normalization.
+- **Integration tests:** Full flows (register → verify → login → MFA → refresh).
+- **Negative tests:** Wrong passwords, expired OTPs, replay attempts.
+- **Security tests:** OWASP ZAP scans, fuzzing, load tests (k6/autocannon).
+- **Cross-app SSO tests:** JWKS validation, key rotation, audience/scope enforcement.
