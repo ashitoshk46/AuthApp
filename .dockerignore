@@ -1,0 +1,7 @@
+# Keep images small by excluding unneeded files
+node_modules
+.git
+.env
+npm-debug.log
+Dockerfile*
+docker-compose*
