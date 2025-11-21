@@ -1,50 +1,74 @@
-# Authentication Architecture (Express + PostgreSQL)
+Authentication System Design – v2
+---------------------------------
 
-## 1. Core Updates
-- Database: PostgreSQL (Render managed service or external provider like Neon/Supabase).
-- ORM/Query Builder: Knex or Prisma for portability (SQLite for local dev, PostgreSQL for prod).
-- Secure connection handling with SSL for production.
+Overview
+--------
+This document outlines the architecture and design for the authentication system (AuthApp) version 2. It merges all detailed sections from v1 and integrates improvements discussed, including PostgreSQL migration, DB connectivity before server start, environment strategy, and deployment notes.
 
-## 2. Environment Strategy
-- Use `.env` for local dev and Docker Compose.
+Key Improvements in v2
+----------------------
+- Migration from SQLite to PostgreSQL for production environments.
+- DB connectivity check before starting the server (fail fast principle).
+- Robust environment handling for dev and prod using NODE_ENV normalization.
+- Security hardening: CSRF, CORS allowlist, rate limiting, Argon2id password hashing.
+- Deployment notes for Docker and Render with external DB access options.
+
+Architecture
+------------
+**Backend**: Express.js, PostgreSQL (Render managed service), pg Pool, optional ORM (Knex/Prisma).
+**Frontend**: React + Redux + Tailwind CSS (future integration).
+**Deployment**: Docker + Render hosting with environment variable injection.
+
+Environment Strategy
+--------------------
+- Use `.env` for local development and Docker Compose.
 - Render uses injected environment variables (DATABASE_URL, NODE_ENV).
-- Robust NODE_ENV check:
-  const isProd = (process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+- Normalize NODE_ENV check: `(process.env.NODE_ENV || '').trim().toLowerCase() === 'production'`.
+- For local dev: external DB URL with SSL mode required.
+- For Render prod: internal DB URL via environment variable.
 
-## 3. Startup DB Connectivity Check
-- Before starting Express server, verify DB connection:
-  - If DB fails, log error and exit process.
-  - Optional: Retry logic with exponential backoff.
+Startup Flow
+------------
+- Validate DB connection before starting Express server.
+- If DB is unreachable, log error and exit process.
+- Optional: Implement retry logic with exponential backoff for transient failures.
 
-## 4. API Endpoints
+API Endpoints
+-------------
 - `/health` → App status.
-- `/db-health` → DB connectivity check (via pg Pool).
+- `/db-health` → DB connectivity check using pg Pool.
 - Future endpoints:
-  - `/register` → Local registration with email verification.
-  - `/login` → Local login with MFA.
-  - `/social/:provider` → Social login (Google, GitHub first).
-  - `/verify/email` → Email verification.
-  - `/mfa/*` → MFA setup and verification.
-  - `/session/refresh` → Token rotation.
-  - `/logout` → Session invalidation.
+    * `/register` → Local registration with email verification.
+    * `/login` → Local login with MFA.
+    * `/social/:provider` → Social login (Google, GitHub).
+    * `/verify/email` → Email verification.
+    * `/mfa/*` → MFA setup and verification.
+    * `/session/refresh` → Token rotation.
+    * `/logout` → Session invalidation.
 
-## 5. Security Enhancements
+Security Enhancements
+---------------------
 - Password hashing: Argon2id.
 - HTTPS only, HSTS, secure cookies (httpOnly, SameSite=strict).
 - CSRF protection for state-changing requests.
 - CORS allowlist (no wildcards).
-- Rate limiting: IP + account-based.
+- Rate limiting: IP + account-based thresholds.
 - SQL safety: Parameterized queries only.
 - Secrets: Rotate keys, encrypt TOTP secrets, store OTPs hashed.
-- Audit logs for auth events.
+- Audit logs for authentication events.
 
-## 6. Deployment Notes
+Deployment Notes
+----------------
 - Dockerfile: No hardcoded env vars; rely on Render injection.
 - Render.yaml: Define environment variables and service dependencies.
 - External DB access for local dev: Enable external connections or use Neon/Supabase.
+- SSL configuration for production DB connections.
 
-## 7. Testing Strategy
+Testing Strategy
+----------------
 - Unit tests: Password hashing, token validation.
 - Integration tests: Full flows (register → verify → login → MFA).
 - Negative tests: Wrong passwords, expired OTPs.
 - Security tests: OWASP ZAP, fuzzing, load tests.
+- Performance tests: k6 or autocannon for load testing.
+
