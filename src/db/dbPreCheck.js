@@ -1,0 +1,262 @@
+import readline from 'readline';
+import { schemas } from './schema.full.js';
+import { dbActions } from './dbActions.js';
+import { runDbAction, getPool } from './db.js';
+import { buildColumnType } from './column/columnParsing.js';
+import { dbTypes, typeMappingsReverse } from './column/dbTypes.js';
+
+const env = (process.env.NODE_ENV || '').trim().toLowerCase();
+const isProd = env === 'production';
+
+/**
+ * Prompt user for confirmation in dev mode
+ */
+const askConfirmation = async (question) => {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  return new Promise((resolve) => {
+    rl.question(`${question} (y/n): `, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === 'y');
+    });
+  });
+};
+
+export const checkDbConnection = async () => {
+  try {
+    console.log();
+    console.log('=> DB Pre-check: Attempting to connect to the database...');
+    await getPool().query('SELECT 1 AS ok');
+    console.log('>> DB Pre-check: Database connection successful.');
+  } catch (err) {
+    console.error('>> DB Pre-check: Database connection error:', err, err.message);
+    process.exit(1);
+  }
+}
+
+/**
+ * Run DB pre-check: validate schema and apply changes if allowed
+ */
+export async function validateSchema(reTry) {
+  console.log()
+  console.log(`=> DB Pre-check: ${reTry ? "re-" : ""}Validating schema...`);
+
+  const diffs = [];
+
+  // ✅ Iterate through schema containers
+  for (const [tableName, schema] of Object.entries(schemas)) {
+    // const res = await getPool().query(`
+    //   SELECT *
+    //   FROM information_schema.columns
+    //   WHERE table_name = $1
+    // `, [tableName]);
+    const res = await getPool().query(`
+      SELECT
+    col.column_name,
+    col.data_type,
+    col.character_maximum_length,
+    col.numeric_precision,
+    col.numeric_scale,
+    col.is_nullable,
+    col.column_default,
+    col.is_identity,
+    col.identity_generation,
+    CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END AS is_primary_key,
+    CASE WHEN uq.column_name IS NOT NULL THEN true ELSE false END AS is_unique,
+    fk.foreign_table,
+    fk.foreign_column,
+    fk.on_delete
+FROM information_schema.columns col
+LEFT JOIN (
+    SELECT column_name
+    FROM information_schema.key_column_usage kcu
+    JOIN information_schema.table_constraints tc ON tc.constraint_name = kcu.constraint_name
+    WHERE tc.table_name = $1 AND tc.constraint_type = 'PRIMARY KEY'
+) pk ON col.column_name = pk.column_name
+LEFT JOIN (
+    SELECT column_name
+    FROM information_schema.key_column_usage kcu
+    JOIN information_schema.table_constraints tc ON tc.constraint_name = kcu.constraint_name
+    WHERE tc.table_name = $1 AND tc.constraint_type = 'UNIQUE'
+) uq ON col.column_name = uq.column_name
+LEFT JOIN (
+    SELECT
+        kcu.column_name,
+        ccu.table_name AS foreign_table,
+        ccu.column_name AS foreign_column,
+        rc.delete_rule AS on_delete
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+    JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+    JOIN information_schema.referential_constraints rc ON rc.constraint_name = tc.constraint_name
+    WHERE tc.table_name = $1 AND tc.constraint_type = 'FOREIGN KEY'
+) fk ON col.column_name = fk.column_name
+WHERE col.table_name = $1
+ORDER BY col.ordinal_position;
+      `, [tableName]);
+
+    // console.log("res : ", res.rows);
+    // continue;
+
+    const containerDiff = { container: tableName, changes: [] };
+
+    // ✅ Table missing
+    if (res.rows.length === 0) {
+      containerDiff.desc = `Table '${tableName}' is not present in the database, can create the table`;
+      containerDiff.action = dbActions.CREATE_TABLE;
+      containerDiff.params = { columns: schema.columns };
+      diffs.push(containerDiff);
+      continue;
+    }
+
+    // ✅ Build DB columns map
+    const dbColumns = res.rows.reduce((acc, col) => {
+
+      let coloumn = `${col.column_name} ${col.data_type}`;
+
+      if (col.data_type === 'character varying') {
+        coloumn += `(${col.character_maximum_length})`
+      }
+
+      if (col.data_type === 'numeric') {
+        coloumn += `(${col.numeric_precision}, ${col.numeric_scale})`
+      }
+
+      if (col.foreign_table && col.foreign_column) {
+        // console.log("col.on_delete : ", col.column_name, col.on_delete, col.foreign_table, col.foreign_column)
+        coloumn += ` references ${col.foreign_table}(${col.foreign_column})${col.on_delete && col.on_delete !== "NO ACTION" ? ` on delete ${col.on_delete}` : ''}`
+      }
+
+      if (col.is_identity.toLowerCase() === 'yes') {
+        if (col.identity_generation.toLowerCase() === "always") {
+          coloumn += " generated always as identity"
+        } else {
+          coloumn += " generated by default as identity"
+        }
+      }
+
+      if (col.is_unique) {
+        coloumn += " unique"
+      }
+
+      if (col.is_nullable && col.is_nullable === 'NO' && col.is_identity.toLowerCase() !== 'yes') {
+        coloumn += " not null"
+      }
+
+      if (col.column_default) {
+        if (col.data_type === 'timestamp') {
+          coloumn += ' default CURRENT_TIMESTAMP'
+        } else {
+          coloumn += ` default ${col.column_default}`
+        }
+      }
+
+      // console.log("coloumn : ", coloumn);
+      acc[col.column_name] = {
+        type: col.is_identity.toLowerCase() === 'yes'
+          ? dbTypes.ID
+          : (col.foreign_table && col.foreign_column)
+            ? dbTypes.REFERENCE
+            : typeMappingsReverse[col.data_type],
+        coloumn
+      };
+      return acc;
+    }, {});
+
+    // console.log(`>>>>>>>>> ${tableName} : `, dbColumns)
+
+    // ✅ Check for missing or mismatched columns
+    for (const col of schema.columns) {
+      const parsedColumns = buildColumnType(col.type, col);
+      if(parsedColumns === dbColumns[col.name]?.coloumn) continue
+      
+      // console.log("might has difference : ", parsedColumns, dbColumns[col.name]?.coloumn);
+      if (!dbColumns[col.name]) {
+        containerDiff.changes.push({
+          desc: `'${col.name}' column is missing; can be added if required.`,
+          action: dbActions.ADD_COLUMN,
+          params: `ALTER TABLE ${tableName} ADD COLUMN ${parsedColumns};`
+        });
+      } else {
+        const dbType = dbColumns[col.name].type.toLowerCase();
+        const expectedType = col.type.toLowerCase();
+        if (dbType !== expectedType) {
+          containerDiff.changes.push({
+            desc: `'${col.name}' column type mismatch; current ${dbType}, expected ${expectedType}.`,
+            action: dbActions.UPDATE_TYPE,
+            params: {
+              name: col,
+              type: col.type
+            }
+          });
+        }
+      }
+    }
+
+    const schema_columns = schema.columns.map(c => c.name);
+    // console.log("schema_columns : ", schema_columns);
+    // console.log("dbColumns : ", dbColumns);
+    // ✅ Check for extra columns
+    for (const col in dbColumns) {
+      if (!schema_columns.includes(col)) {
+        // console.log("col2 : ", col, schema_columns.includes(col), !schema_columns.includes(col));
+        containerDiff.changes.push({
+          desc: `'${col}' column is extra; can be safely removed.`,
+          action: dbActions.DELETE_COLUMN,
+          params: { name: col }
+        });
+      }
+    }
+
+    // console.log("containerDiff : ", JSON.stringify(containerDiff));
+
+    if (containerDiff.desc || containerDiff.changes.length > 0) {
+      diffs.push(containerDiff);
+    }
+  }
+
+  // ✅ If no diffs, exit successfully
+  if (diffs.length === 0) {
+    console.log('');
+    console.log('>> DB Pre-check: Validating schema successful. Schema Matched!');
+    return 0;
+  }
+
+  // ✅ Show diffs
+  // console.log('Schema differences found: ', JSON.stringify(diffs, null, 4));
+  diffs.forEach(d => {
+    // console.log(`\nContainer: ${d.container}`);
+    if (d.desc) console.log(`- ${d.desc}`);
+    d.changes.forEach(c => console.log(`  * ${c.desc}`));
+  });
+
+  // ✅ Handle prod vs dev mode
+  if (isProd) {
+    console.error('Schema mismatch in production. Stopping server.');
+    console.log("diffs : ", JSON.stringify(diffs, null, 4));
+    process.exit(1);
+  } else {
+    const confirm = await askConfirmation('Apply these changes?');
+    if (!confirm) {
+      console.log('User declined. Exiting.');
+      process.exit(1);
+    }
+
+    // ✅ Apply changes
+    for (const diff of diffs) {
+      if (diff.action) {
+        await runDbAction(diff.action, diff.container, diff.params);
+      }
+      console.log('Applying changes for container:', diff.container, diff.changes);
+      for (const change of diff.changes) {
+        await runDbAction(change.action, diff.container, change.params);
+      }
+    }
+
+    return 1;
+  }
+
+  console.log('DB pre-check completed successfully.');
+}

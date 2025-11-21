@@ -1,4 +1,5 @@
 import { getPool } from "../db/db.js";
+import registerRoute from '../routes/register.js';
 
 
 
@@ -18,6 +19,9 @@ const appRoutes = (app) => {
             process.exit(1);
         }
     });
+
+    // Register user api
+    app.use('/api', registerRoute);
 }
 
 

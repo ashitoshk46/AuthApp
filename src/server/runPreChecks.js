@@ -1,10 +1,15 @@
-import { checkDbConnection, validate_db_schema } from "../db/db.js"
+import { validateSchema, checkDbConnection } from '../db/dbPreCheck.js';
 
 
 
 const makePreChecks = async () => {
     await checkDbConnection();
-    await validate_db_schema();
+    let tries = 3;
+    while (tries) {
+        const reCheck = await validateSchema(tries < 3);
+        if (!reCheck) break;
+        tries -= 1;
+    }
 }
 
 
