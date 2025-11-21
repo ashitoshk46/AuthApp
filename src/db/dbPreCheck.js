@@ -219,8 +219,8 @@ ORDER BY col.ordinal_position;
 
   // ✅ If no diffs, exit successfully
   if (diffs.length === 0) {
-    console.log('');
     console.log('>> DB Pre-check: Validating schema successful. Schema Matched!');
+    console.log();
     return 0;
   }
 
