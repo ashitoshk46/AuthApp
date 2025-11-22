@@ -1,5 +1,12 @@
 import { getPool } from "../db/db.js";
 import registerRoute from '../routes/register.js';
+import loginRoute from '../routes/login.js'
+import sendVerificationEmailRouter from '../routes/sendVerificationEmail.js';
+import verifyEmailRouter from "../routes/verifyEmail.js"
+import emailVerifiedRouter from "../routes/emailVerified.js"
+import refeshToken from "../routes/refreshToken.js"
+import logoutRoute from "../routes/logout.js"
+
 
 
 
@@ -19,9 +26,18 @@ const appRoutes = (app) => {
             process.exit(1);
         }
     });
+    
 
     // Register user api
     app.use('/api', registerRoute);
+    app.use('/api', sendVerificationEmailRouter);
+    app.use('/api', verifyEmailRouter);
+    app.use('/api', emailVerifiedRouter);
+    app.use('/api', loginRoute);
+    app.use('/api', logoutRoute);
+    app.use('/api', refeshToken);
+    
+
 }
 
 
