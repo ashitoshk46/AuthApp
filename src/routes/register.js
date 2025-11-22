@@ -1,14 +1,29 @@
+
 import express from 'express';
 import argon2 from 'argon2';
 import { body, validationResult } from 'express-validator';
-import {getPool} from '../db/db.js'; // Your pg Pool instance
+import { getPool } from '../db/db.js';
+import rateLimit from 'express-rate-limit';
+import { sendVerificationEmail } from '../utils/sendVerificationEmailUtil.js';
 
 const router = express.Router();
 
+const registerLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    message: 'Too many registration attempts, please try again later.'
+});
+
 router.post('/register',
+    registerLimiter,
     [
         body('email').isEmail().withMessage('Invalid email'),
-        body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 chars')
+        body('password')
+            .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+            .matches(/[A-Z]/).withMessage('Password must contain an uppercase letter')
+            .matches(/[a-z]/).withMessage('Password must contain a lowercase letter')
+            .matches(/\d/).withMessage('Password must contain a number')
+            .matches(/[@$!%*?&]/).withMessage('Password must contain a special character')
     ],
     async (req, res) => {
         const errors = validationResult(req);
@@ -17,23 +32,55 @@ router.post('/register',
         }
 
         const { email, password } = req.body;
+        const pool = getPool();
 
         try {
-            // Check if user exists
-            const existing = await getPool().query('SELECT id FROM users WHERE email = $1', [email]);
-            if (existing.rows.length > 0) {
+            await pool.query('BEGIN');
+
+            const existingIdentity = await pool.query(
+                `SELECT id FROM user_identities WHERE provider = $1 AND email = $2`,
+                ['local', email]
+            );
+            if (existingIdentity.rows.length > 0) {
+                await pool.query('ROLLBACK');
                 return res.status(409).json({ error: 'Email already registered' });
             }
 
-            // Hash password
             const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
 
-            // Insert user
-            await getPool().query('INSERT INTO users (email, password_hash) VALUES ($1, $2)', [email, passwordHash]);
+            const userResult = await pool.query(
+                `INSERT INTO users (primary_email) VALUES ($1) RETURNING id`,
+                [email]
+            );
+            const userId = userResult.rows[0].id;
 
-            return res.status(201).json({ message: 'User registered successfully' });
+            await pool.query(
+                `INSERT INTO user_identities (user_id, provider, email, password_hash)
+         VALUES ($1, $2, $3, $4)`,
+                [userId, 'local', email, passwordHash]
+            );
+
+            await pool.query(
+                `INSERT INTO audit_logs (user_id, event, ip_address)
+         VALUES ($1, $2, $3)`,
+                [userId, 'REGISTER_SUCCESS', req.ip]
+            );
+
+            // Send verification email using helper
+            await sendVerificationEmail(userId, email);
+
+            await pool.query(
+                `INSERT INTO audit_logs (user_id, event, ip_address)
+                VALUES ($1, $2, $3)`,
+                [userId, 'VERIFICATION_EMAIL_RESENT', req.ip]
+            );
+
+            await pool.query('COMMIT');
+
+            return res.status(201).json({ message: 'User registered successfully. Please check your email to verify your account.' });
         } catch (err) {
             console.error(err);
+            await pool.query('ROLLBACK');
             return res.status(500).json({ error: 'Internal Server Error' });
         }
     }
