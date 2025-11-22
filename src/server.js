@@ -1,6 +1,7 @@
+
+import configure from "./server/configure.js";
 import generateApp from "./server/generateApp.js";
 import appRoutes from "./server/addRoute.js";
-import configure from "./server/configure.js";
 import runPreChecks from "./server/runPreChecks.js";
 
 const startServer = async () => {
