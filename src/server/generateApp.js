@@ -16,6 +16,8 @@ const generateApp = () => {
     const app = express();
     app.disable('x-powered-by');
     applySecurityHeaders(app);
+    // ✅ Enable trust proxy if behind a proxy
+    app.set('trust proxy', 1); // or true for all proxies
     app.use(limiter);
     app.use(compression());
     app.use(express.json({ limit: '10kb' }));
