@@ -32,9 +32,9 @@ router.post('/login',
       // Fetch user and identity
       const userRes = await pool.query(
         `SELECT u.id AS user_id, u.is_verified, ui.password_hash
-         FROM users u
-         JOIN user_identities ui ON ui.user_id = u.id
-         WHERE ui.email = $1 AND ui.provider = $2`,
+        FROM users u
+        JOIN user_identities ui ON ui.user_id = u.id
+        WHERE ui.email = $1 AND ui.provider = $2`,
         [email, 'local']
       );
 
@@ -54,7 +54,7 @@ router.post('/login',
       if (!valid) {
         await pool.query(
           `INSERT INTO audit_logs (user_id, event, ip_address)
-           VALUES ($1, $2, $3)`,
+          VALUES ($1, $2, $3)`,
           [user_id, 'LOGIN_FAILED', req.ip]
         );
         return res.status(401).json({ error: 'Invalid credentials' });
@@ -70,14 +70,14 @@ router.post('/login',
       // Store new session
       await pool.query(
         `INSERT INTO sessions (user_id, refresh_token, expires_at)
-         VALUES ($1, $2, NOW() + interval '7 days')`,
+        VALUES ($1, $2, NOW() + interval '7 days')`,
         [user_id, refreshToken]
       );
 
       // Log successful login
       await pool.query(
         `INSERT INTO audit_logs (user_id, event, ip_address)
-         VALUES ($1, $2, $3)`,
+        VALUES ($1, $2, $3)`,
         [user_id, 'LOGIN_SUCCESS', req.ip]
       );
 
