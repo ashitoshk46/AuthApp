@@ -170,7 +170,7 @@ ORDER BY col.ordinal_position;
     // ✅ Check for missing or mismatched columns
     for (const col of schema.columns) {
       const parsedColumns = buildColumnType(col.type, col);
-      if(parsedColumns === dbColumns[col.name]?.coloumn) continue
+      if (parsedColumns === dbColumns[col.name]?.coloumn) continue
       
       // console.log("might has difference : ", parsedColumns, dbColumns[col.name]?.coloumn);
       if (!dbColumns[col.name]) {
@@ -214,6 +214,8 @@ ORDER BY col.ordinal_position;
 
     if (containerDiff.desc || containerDiff.changes.length > 0) {
       diffs.push(containerDiff);
+    } else {
+      console.log(`>> ${tableName} passed the db schema check.`)
     }
   }
 
@@ -257,6 +259,4 @@ ORDER BY col.ordinal_position;
 
     return 1;
   }
-
-  console.log('DB pre-check completed successfully.');
 }
