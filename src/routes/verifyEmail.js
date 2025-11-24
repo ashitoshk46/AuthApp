@@ -62,7 +62,7 @@ router.get('/verify-email', async (req, res) => {
     await pool.query('COMMIT');
 
     // Redirect or JSON response
-    return res.redirect(`email-verified`);
+    return res.redirect(`${process.env.APP_URL}/api/email-verified`);
     // Or: return res.status(200).json({ message: 'Email verified successfully' });
   } catch (err) {
     console.error(err);
