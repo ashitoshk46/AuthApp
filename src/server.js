@@ -1,7 +1,7 @@
 
 import configure from "./server/configure.js";
 import generateApp from "./server/generateApp.js";
-import appRoutes from "./server/addRoute.js";
+import addAppRoutes from "./server/addAppRoutes.js";
 import runPreChecks from "./server/runPreChecks.js";
 
 const startServer = async () => {
@@ -12,7 +12,7 @@ const startServer = async () => {
     await runPreChecks();
 
   const app = generateApp();
-  appRoutes(app);
+  addAppRoutes(app);
 
   console.log();
   console.log("<<===============================>>");

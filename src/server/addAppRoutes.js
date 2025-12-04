@@ -10,7 +10,7 @@ import logoutRoute from "../routes/logout.js"
 
 
 
-const appRoutes = (app) => {
+const addAppRoutes = (app) => {
 
     // ✅ Health endpoint for app
     app.get('/', (_req, res) => res.json({ ok: true, env: process.env.NODE_ENV }));
@@ -42,4 +42,4 @@ const appRoutes = (app) => {
 }
 
 
-export default appRoutes;
+export default addAppRoutes;
