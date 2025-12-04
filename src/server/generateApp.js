@@ -18,15 +18,14 @@ const generateApp = () => {
     applySecurityHeaders(app);
     // ✅ Enable trust proxy if behind a proxy
     app.set('trust proxy', 1); // or true for all proxies
-    app.use(limiter);
-    app.use(compression());
-    app.use(express.json({ limit: '10kb' }));
-    app.use(cookieParser());
     const allowedOrigins = process.env.CORS_ORIGINS
         ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
         : ['http://localhost:3000'];
     app.use(cors({ origin: allowedOrigins, credentials: true }));
-
+    app.use(limiter);
+    app.use(compression());
+    app.use(express.json({ limit: '10kb' }));
+    app.use(cookieParser());
     if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
     else app.use(morgan('combined'));
     generaicError(app);
