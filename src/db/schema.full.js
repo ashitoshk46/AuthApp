@@ -41,7 +41,6 @@ export const schemas = {
       { name: 'created_at', type: dbTypes.TIMESTAMP, current: true }
     ]
   },
-
   verification_attempts: {
     columns: [
       { name: 'id', type: dbTypes.ID, primary: true },
