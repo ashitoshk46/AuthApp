@@ -6,7 +6,7 @@ const configure = async () => {
     console.log('=> Loading environment variables...');
 
     
-    process.env.NODE_ENV = process.env.NODE_ENV?.trim();
+    process.env.NODE_ENV = (process.env.NODE_ENV || "")?.trim();
 
     if (process.env.NODE_ENV !== 'production') {
         await import('dotenv').then(dotenv => {
