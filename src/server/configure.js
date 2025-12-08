@@ -1,4 +1,5 @@
 import { initializeDb } from '../db/db.js';
+import { createEmailService } from '../utils/emailService.js';
 
 const configure = async () => {
     // Load .env in non-production
@@ -13,7 +14,7 @@ const configure = async () => {
             dotenv.config();
         });
         process.env.NODE_ENV =  process.env.NODE_ENV ? process.env.NODE_ENV : "development";
-        process.env.APP_URL = `${process.env.HOST}:${process.env.PORT}`;
+        process.env.APP_URL = `http://${process.env.HOST}:${process.env.PORT}`;
     } else {
         process.env.APP_URL = process.env.HOST;
     }
@@ -21,6 +22,8 @@ const configure = async () => {
     console.log('>> Environment variables loaded');
 
     initializeDb();
+
+    createEmailService();    
 }
 
 export default configure;
