@@ -4,7 +4,7 @@ import argon2 from 'argon2';
 import { body, validationResult } from 'express-validator';
 import { getPool } from '../db/db.js';
 import rateLimit from 'express-rate-limit';
-import { sendVerificationEmail } from '../utils/sendVerificationEmailUtil.js';
+import { emailService } from '../utils/emailService.js';
 
 const router = express.Router();
 
@@ -67,12 +67,20 @@ router.post('/register',
             );
 
             // Send verification email using helper
-            await sendVerificationEmail(userId, email);
+           await emailService.sendVerificationEmail(userId, email, 'primary', {
+                userId,
+                to: email,
+                templateKey: 'verifyEmail',
+                variables: { userId },
+                providerKey: 'primary',
+                ipAddress: req.ip,
+                resend: false
+            });
 
             await pool.query(
                 `INSERT INTO audit_logs (user_id, event, ip_address)
                 VALUES ($1, $2, $3)`,
-                [userId, 'VERIFICATION_EMAIL_RESENT', req.ip]
+                [userId, 'VERIFICATION_EMAIL_SENT', req.ip]
             );
 
             await pool.query('COMMIT');
