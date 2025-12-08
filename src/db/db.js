@@ -29,36 +29,114 @@ export async function executeCommand(sql) {
   console.log(`Executed: ${sql}`);
 }
 
+// example drop-in extension for runDbAction (adjust imports/logger/db client)
 export async function runDbAction(action, container, params) {
-  switch (action) {
-    case dbActions.CREATE_TABLE:
-      // console.log('Creating table:', container, params);
-      // return createTable(container, params.columns);
-      
-      console.log(`Table: ${container}`);
+  // container = table name
+  // params = either a string SQL (simple) or object { sql, ... } for richer actions
+  let sql = null;
 
-      const columns = params.columns.map((col) => {
-        return buildColumnType(col.type, col);
-      })
-      const constraints = buildTable(params);
-      
-      console.log(`CREATE TABLE IF NOT EXISTS ${container} (\n  ${columns.join(',\n  ')}${constraints ? ',\n  ' + constraints : ''}\n);`);
-      
-      const ret = await executeCommand(`CREATE TABLE IF NOT EXISTS ${container} (\n  ${columns.join(',\n  ')}${constraints ? ',\n  ' + constraints : ''}\n);`);
-      
-      return;
-    case dbActions.DELETE_TABLE:
-      return deleteTable(container);
-    case dbActions.ADD_COLUMN:
-      return await executeCommand(params);
-    case dbActions.DELETE_COLUMN:
-      return deleteColumn(container, params.name);
-    case dbActions.UPDATE_TYPE:
-      return updateColumnType(container, params.name, params.type);
-    default:
-      throw new Error(`Unsupported DB action: ${action}`);
+  // If params is a string, treat as raw SQL (backwards compatible)
+  if (typeof params === 'string') {
+    sql = params;
+  } else if (params && params.sql) {
+    sql = params.sql;
+  } else {
+    switch (action) {
+      case dbActions.ADD_COLUMN:
+        // params: { sql: 'ALTER TABLE ...' } or you can construct
+        sql = params.sql ?? `ALTER TABLE ${container} ADD COLUMN ${params.definition};`;
+        break;
+
+      case dbActions.DELETE_COLUMN:
+        sql = params.sql ?? `ALTER TABLE ${container} DROP COLUMN ${params.name} CASCADE;`;
+        break;
+
+      case dbActions.ALTER_TYPE:
+        // params: { column, type, using }
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} TYPE ${params.type} USING (${params.using ?? `${params.column}::${params.type.split('(')[0]}`});`;
+        break;
+
+      case dbActions.SET_DEFAULT:
+        // params: { column, defaultValue }
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} SET DEFAULT ${params.defaultValue};`;
+        break;
+
+      case dbActions.DROP_DEFAULT:
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} DROP DEFAULT;`;
+        break;
+
+      case dbActions.SET_NOT_NULL:
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} SET NOT NULL;`;
+        break;
+
+      case dbActions.DROP_NOT_NULL:
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} DROP NOT NULL;`;
+        break;
+
+      case dbActions.ADD_PRIMARY_KEY:
+        // params: { cols: ['id'] }
+        sql = params.sql ?? `ALTER TABLE ${container} ADD CONSTRAINT ${container}_pkey PRIMARY KEY (${params.cols.join(', ')});`;
+        break;
+
+      case dbActions.DROP_PRIMARY_KEY:
+        sql = params.sql ?? `ALTER TABLE ${container} DROP CONSTRAINT ${params.constraintName};`;
+        break;
+
+      case dbActions.ADD_UNIQUE:
+        // params: { cols: ['email'], name?: 'tbl_email_uniq' }
+        sql = params.sql ?? `ALTER TABLE ${container} ADD CONSTRAINT ${params.name ?? `${container}_${params.cols.join('_')}_uniq`} UNIQUE (${params.cols.join(', ')});`;
+        break;
+
+      case dbActions.DROP_UNIQUE:
+        sql = params.sql ?? `ALTER TABLE ${container} DROP CONSTRAINT ${params.constraintName};`;
+        break;
+
+      case dbActions.ADD_FOREIGN_KEY:
+        // params: { column, refTable, refColumn, onDelete }
+        sql = params.sql ?? `ALTER TABLE ${container} ADD CONSTRAINT ${container}_${params.column}_fkey FOREIGN KEY (${params.column}) REFERENCES ${params.refTable}(${params.refColumn}) ON DELETE ${params.onDelete ?? 'NO ACTION'};`;
+        break;
+
+      case dbActions.DROP_FOREIGN_KEY:
+        sql = params.sql ?? `ALTER TABLE ${container} DROP CONSTRAINT ${params.constraintName};`;
+        break;
+
+      case dbActions.ADD_IDENTITY:
+        // params: { column, mode: 'BY DEFAULT'|'ALWAYS' }
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} ADD GENERATED ${params.mode ?? 'BY DEFAULT'} AS IDENTITY;`;
+        break;
+
+      case dbActions.DROP_IDENTITY:
+        sql = params.sql ?? `ALTER TABLE ${container} ALTER COLUMN ${params.column} DROP IDENTITY IF EXISTS;`;
+        break;
+
+      case dbActions.RENAME_COLUMN:
+        sql = params.sql ?? `ALTER TABLE ${container} RENAME COLUMN ${params.from} TO ${params.to};`;
+        break;
+
+      case dbActions.RENAME_TABLE:
+        sql = params.sql ?? `ALTER TABLE ${container} RENAME TO ${params.to};`;
+        break;
+
+      default:
+        throw new Error(`Unknown DB action: ${action}`);
+    }
+  }
+
+  if (!sql) {
+    throw new Error(`No SQL generated for action ${action}`);
+  }
+
+  // Execute SQL
+  try {
+    console.log(`[runDbAction] executing: ${sql}`);
+    const res = await getPool().query(sql);
+    return res;
+  } catch (err) {
+    console.error(`[runDbAction] failed for ${action} on ${container}:`, err.message || err);
+    throw err;
   }
 }
+
 
 async function createTable(tableName, columns) {
   const columnDefs = Object.entries(columns)
