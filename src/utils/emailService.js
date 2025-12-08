@@ -6,6 +6,7 @@ import net from 'net';
 import { getPool } from '../db/db.js';
 import { create } from 'domain';
 
+
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 const withRetry = async (fn, attempts = 2, baseDelay = 500) => {
@@ -58,6 +59,8 @@ const logAudit = async ({ userId, event, ipAddress = null }) => {
  */
 class EmailService {
     constructor(options = {}) {
+
+        const ignoreTlsErrors = process.env.EMAIL_IGNORE_TLS_ERRORS === 'true';
         const appName = options.appName ?? process.env.APP_NAME ?? 'App';
         const appIcon = options.appIcon ?? process.env.APP_ICON ?? '';
 
@@ -103,6 +106,22 @@ class EmailService {
         if (this.transporters.has(key)) return this.transporters.get(key);
 
         const provider = this._getProvider(key);
+        // const transporter = nodemailer.createTransport({
+        //     host: provider.host,
+        //     port: provider.port,
+        //     secure: provider.port === 465,
+        //     auth: {
+        //         user: provider.user,
+        //         pass: provider.pass,
+        //     },
+        //     tls: {
+        //         rejectUnauthorized: true,
+        //     },
+        // });
+        if (this.ignoreTlsErrors) {
+            logger.warn('EMAIL_IGNORE_TLS_ERRORS=true — nodemailer TLS certificate validation disabled (dev only).');
+        }
+
         const transporter = nodemailer.createTransport({
             host: provider.host,
             port: provider.port,
@@ -112,8 +131,9 @@ class EmailService {
                 pass: provider.pass,
             },
             tls: {
-                rejectUnauthorized: true,
-            },
+                // default: true (strict). Set EMAIL_IGNORE_TLS_ERRORS=true to disable verification.
+                rejectUnauthorized: this.ignoreTlsErrors ? false : true
+            }
         });
 
         this.transporters.set(key, transporter);
@@ -216,7 +236,7 @@ class EmailService {
                     console.error('   Command:', err.command);
                     console.error('   Type:', classified.type, 'Provider:', classified.provider);
                     console.error('   Hint:', classified.hint);
-                    
+
                     console.error(`>> ❌ SMTP preCheck failed for provider "${providerKey}" at stage:`, stage);
                 }
 
@@ -497,7 +517,7 @@ class EmailService {
     }
 }
 
-let emailService = null;
+export let emailService = null;
 
 export const createEmailService = (options = {}) => {
     if (!emailService) {
@@ -505,5 +525,3 @@ export const createEmailService = (options = {}) => {
     }
     return emailService;
 };
-
-export { emailService, EmailService };
