@@ -1,11 +1,10 @@
 import express from 'express';
-import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
-import generaicError from '../Errors/generaicError.js';
+import generaicError from '../Errors/genericError.js';
 import applySecurityHeaders from './applySecurityHeaders.js';
 
 
